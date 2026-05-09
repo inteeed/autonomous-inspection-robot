@@ -1,0 +1,18 @@
+# Inspection waypoints. Each waypoint sets a (x, y, yaw_rad) target the
+# follower will drive to and dwell at. The yaw here is the *robot*'s heading at
+# the waypoint — set so the camera (mounted facing +X) looks at the marker.
+#
+# Layout reference (markers are at z=0.5 facing inward toward the origin):
+#   id 0 : ( 2.5,  0.0)  facing -X   -> approach from west, look east
+#   id 1 : ( 0.0,  2.5)  facing -Y   -> approach from south, look north
+#   id 2 : (-2.5,  0.0)  facing +X   -> approach from east, look west
+#   id 3 : ( 0.0, -2.5)  facing +Y   -> approach from north, look south
+#   id 4 : ( 1.8,  1.8)  facing toward origin (yaw 225 deg) -> approach from origin
+
+waypoints:
+  - { label: "approach_marker_0", x:  1.5, y:  0.0, yaw:  0.0 }
+  - { label: "approach_marker_1", x:  0.0, y:  1.5, yaw:  1.5708 }
+  - { label: "approach_marker_2", x: -1.5, y:  0.0, yaw:  3.1416 }
+  - { label: "approach_marker_3", x:  0.0, y: -1.5, yaw: -1.5708 }
+  - { label: "approach_marker_4", x:  0.9, y:  0.9, yaw:  0.7854 }
+  - { label: "return_home",       x:  0.0, y:  0.0, yaw:  0.0 }

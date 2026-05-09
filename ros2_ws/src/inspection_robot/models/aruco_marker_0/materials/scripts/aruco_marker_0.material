@@ -1,0 +1,16 @@
+material aruco_marker_0
+{
+  receive_shadows off
+  technique
+  {
+    pass
+    {
+      lighting off
+      texture_unit
+      {
+        texture aruco_marker_0.png
+        filtering none
+      }
+    }
+  }
+}

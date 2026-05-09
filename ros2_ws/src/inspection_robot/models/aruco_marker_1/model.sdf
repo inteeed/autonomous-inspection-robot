@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="aruco_marker_1">
+    <static>true</static>
+    <link name="link">
+      <visual name="back">
+        <geometry>
+          <box><size>0.01 0.4 0.4</size></box>
+        </geometry>
+        <material>
+          <ambient>0.9 0.9 0.9 1</ambient>
+          <diffuse>0.9 0.9 0.9 1</diffuse>
+        </material>
+      </visual>
+      <visual name="face">
+        <pose>0.0055 0 0 0 0 0</pose>
+        <geometry>
+          <box><size>0.0005 0.4 0.4</size></box>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://aruco_marker_1/materials/scripts</uri>
+            <uri>model://aruco_marker_1/materials/textures</uri>
+            <name>aruco_marker_1</name>
+          </script>
+        </material>
+      </visual>
+      <collision name="col">
+        <geometry>
+          <box><size>0.01 0.4 0.4</size></box>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

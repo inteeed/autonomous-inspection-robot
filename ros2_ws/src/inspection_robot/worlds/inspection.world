@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="inspection_world">
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+<model name="wall_0">
+  <static>true</static>
+  <link name="link">
+    <pose>5.5 0.0 1.0 0 0 0</pose>
+    <visual name="v"><geometry><box><size>0.2 11.0 2.0</size></box></geometry>
+      <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+    </visual>
+    <collision name="c"><geometry><box><size>0.2 11.0 2.0</size></box></geometry></collision>
+  </link>
+</model>
+<model name="wall_1">
+  <static>true</static>
+  <link name="link">
+    <pose>-5.5 0.0 1.0 0 0 0</pose>
+    <visual name="v"><geometry><box><size>0.2 11.0 2.0</size></box></geometry>
+      <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+    </visual>
+    <collision name="c"><geometry><box><size>0.2 11.0 2.0</size></box></geometry></collision>
+  </link>
+</model>
+<model name="wall_2">
+  <static>true</static>
+  <link name="link">
+    <pose>0.0 5.5 1.0 0 0 0</pose>
+    <visual name="v"><geometry><box><size>11.0 0.2 2.0</size></box></geometry>
+      <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+    </visual>
+    <collision name="c"><geometry><box><size>11.0 0.2 2.0</size></box></geometry></collision>
+  </link>
+</model>
+<model name="wall_3">
+  <static>true</static>
+  <link name="link">
+    <pose>0.0 -5.5 1.0 0 0 0</pose>
+    <visual name="v"><geometry><box><size>11.0 0.2 2.0</size></box></geometry>
+      <material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material>
+    </visual>
+    <collision name="c"><geometry><box><size>11.0 0.2 2.0</size></box></geometry></collision>
+  </link>
+</model>
+<model name="tank_0">
+  <static>true</static>
+  <link name="link">
+    <pose>3.0 3.0 0.75 0 0 0</pose>
+    <visual name="v"><geometry><cylinder><radius>0.9</radius><length>1.5</length></cylinder></geometry>
+      <material><ambient>0.3 0.4 0.5 1</ambient><diffuse>0.3 0.4 0.5 1</diffuse></material>
+    </visual>
+    <collision name="c"><geometry><cylinder><radius>0.9</radius><length>1.5</length></cylinder></geometry></collision>
+  </link>
+</model>
+<model name="tank_1">
+  <static>true</static>
+  <link name="link">
+    <pose>-3.0 3.0 0.75 0 0 0</pose>
+    <visual name="v"><geometry><cylinder><radius>0.9</radius><length>1.5</length></cylinder></geometry>
+      <material><ambient>0.3 0.4 0.5 1</ambient><diffuse>0.3 0.4 0.5 1</diffuse></material>
+    </visual>
+    <collision name="c"><geometry><cylinder><radius>0.9</radius><length>1.5</length></cylinder></geometry></collision>
+  </link>
+</model>
+<include>
+  <uri>model://aruco_marker_0</uri>
+  <name>aruco_marker_0</name>
+  <pose>2.5 0.0 0.5 0 0 3.1416</pose>
+</include>
+<include>
+  <uri>model://aruco_marker_1</uri>
+  <name>aruco_marker_1</name>
+  <pose>0.0 2.5 0.5 0 0 4.7124</pose>
+</include>
+<include>
+  <uri>model://aruco_marker_2</uri>
+  <name>aruco_marker_2</name>
+  <pose>-2.5 0.0 0.5 0 0 0.0000</pose>
+</include>
+<include>
+  <uri>model://aruco_marker_3</uri>
+  <name>aruco_marker_3</name>
+  <pose>0.0 -2.5 0.5 0 0 1.5708</pose>
+</include>
+<include>
+  <uri>model://aruco_marker_4</uri>
+  <name>aruco_marker_4</name>
+  <pose>1.8 1.8 0.5 0 0 3.9270</pose>
+</include>
+
+  </world>
+</sdf>

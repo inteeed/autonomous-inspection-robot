@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//opt/ros/**)",
+      "Bash(python3 -c \"import cv2; print\\('cv2', cv2.__version__\\); print\\('aruco?', hasattr\\(cv2,'aruco'\\)\\)\")"
+    ]
+  }
+}
