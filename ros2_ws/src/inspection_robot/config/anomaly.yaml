@@ -1,6 +1,9 @@
 anomaly_detector:
   ros__parameters:
-    roi_padding_px: 45
-    red_ratio_threshold: 0.035
-    dark_ratio_threshold: 0.18
+    roi_padding_px: 80
+    red_ratio_threshold: 0.030
+    dark_ratio_threshold: 0.150
+    orange_ratio_threshold: 0.025
+    bright_ratio_threshold: 0.040
+    edge_density_threshold: 0.120
     save_snapshots: true

@@ -6,8 +6,11 @@ timestamp), and writes a structured report when /inspection/run_done arrives
 True or on shutdown (Ctrl-C).
 
 Output (per run, under output_dir/<run_id>/):
-  - report.json : full structured record
-  - report.csv  : flat per-marker rows for spreadsheets
+  - report.json   : full structured record (includes cross-run history)
+  - report.csv    : flat per-marker rows for spreadsheets
+  - report.pdf    : human-readable PDF with embedded anomaly snapshots
+
+Cross-run history is maintained in output_dir/history.json.
 """
 from __future__ import annotations
 
@@ -56,6 +59,8 @@ class ReportLogger(Node):
         self.create_subscription(
             Bool, self.get_parameter('done_topic').value, self._on_done, 1)
 
+        self._history_path = os.path.join(
+            str(self.get_parameter('output_dir').value), 'history.json')
         self.get_logger().info(f'report_logger writing to {self.output_dir}')
 
     def _on_detection(self, msg: String):
@@ -92,12 +97,55 @@ class ReportLogger(Node):
         if msg.data:
             self.flush()
 
+    def _load_history(self) -> dict:
+        try:
+            with open(self._history_path, 'r') as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {'runs': [], 'markers': {}}
+
+    def _save_history(self, history: dict):
+        try:
+            with open(self._history_path, 'w') as f:
+                json.dump(history, f, indent=2)
+        except OSError as e:
+            self.get_logger().warn(f'Could not write history: {e}')
+
+    def _update_history(self, history: dict, seen: set, anomalies: dict):
+        history.setdefault('runs', []).append(self.run_id)
+        history.setdefault('markers', {})
+        for mid in set(int(m) for m in self.expected) | seen:
+            key = str(mid)
+            entry = history['markers'].setdefault(key, {
+                'total_runs': 0,
+                'anomaly_runs': 0,
+                'last_status': 'MISSING',
+                'consecutive_anomalies': 0,
+                'last_run': '',
+            })
+            entry['total_runs'] += 1
+            entry['last_run'] = self.run_id
+            if mid not in seen:
+                entry['last_status'] = 'MISSING'
+                entry['consecutive_anomalies'] = 0
+            elif anomalies.get(mid, {}).get('status') == 'ANOMALY':
+                entry['anomaly_runs'] += 1
+                entry['consecutive_anomalies'] += 1
+                entry['last_status'] = 'ANOMALY'
+            else:
+                entry['consecutive_anomalies'] = 0
+                entry['last_status'] = 'PASS'
+        return history
+
     def flush(self):
         if self.flushed:
             return
         self.flushed = True
         seen = set(self.observations.keys())
         expected = set(int(m) for m in self.expected)
+        history = self._load_history()
+        history = self._update_history(history, seen, self.anomalies)
+        self._save_history(history)
         report = {
             'run_id': self.run_id,
             'generated_at': datetime.now().isoformat(timespec='seconds'),
@@ -109,6 +157,7 @@ class ReportLogger(Node):
             'unexpected_markers': sorted(seen - expected),
             'observations': sorted(self.observations.values(), key=lambda o: o['id']),
             'anomalies': sorted(self.anomalies.values(), key=lambda o: o['id']),
+            'history': history.get('markers', {}),
         }
         json_path = os.path.join(self.output_dir, 'report.json')
         with open(json_path, 'w') as f:

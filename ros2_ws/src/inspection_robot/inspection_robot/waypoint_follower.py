@@ -76,6 +76,10 @@ class WaypointFollower(Node):
         self.declare_parameter('avoid_linear_speed', 0.10)
         self.declare_parameter('avoid_angular_speed', 0.8)
         self.declare_parameter('scan_timeout_s', 0.75)
+        self.declare_parameter('stuck_timeout_s', 8.0)
+        self.declare_parameter('stuck_min_progress_m', 0.05)
+        self.declare_parameter('recovery_backup_speed', -0.12)
+        self.declare_parameter('recovery_backup_duration_s', 1.8)
 
         path = self.get_parameter('waypoints_file').value
         self.waypoints: List[Tuple[float, float, float, str]] = self._load_waypoints(path)
@@ -108,11 +112,16 @@ class WaypointFollower(Node):
         self.latest_scan: Optional[LaserScan] = None
         self.last_scan_time = None
         self.idx = 0
-        self.phase = 'turn'        # 'turn' -> 'drive' -> 'avoid' -> 'align' -> 'dwell'
+        self.phase = 'turn'        # 'turn' | 'drive' | 'avoid' | 'align' | 'dwell' | 'recovery'
         self.dwell_t0 = None
         self.run_finished = not bool(self.get_parameter('autostart').value)
         self.avoid_direction = 1
         self.skip_marker_ids = set()
+        # Stuck detection
+        self._stuck_ref_pos: Optional[Tuple[float, float]] = None
+        self._stuck_ref_time: Optional[float] = None
+        self._recovery_t0: Optional[float] = None
+        self._recovery_attempts = 0
 
         rate = float(self.get_parameter('control_rate_hz').value)
         self.timer = self.create_timer(1.0 / rate, self._tick)
@@ -153,6 +162,9 @@ class WaypointFollower(Node):
         self.phase = 'turn'
         self.dwell_t0 = None
         self.run_finished = False
+        self._stuck_ref_pos = None
+        self._stuck_ref_time = None
+        self._recovery_attempts = 0
         self._publish_status('pid_run_started')
 
     def _on_skip_markers(self, msg: String):
@@ -209,10 +221,49 @@ class WaypointFollower(Node):
     def _enter_avoidance(self, label: str, metrics):
         self.avoid_direction = choose_avoid_direction(metrics['left'], metrics['right'])
         self.phase = 'avoid'
+        self._reset_stuck_ref()
         direction = 'left' if self.avoid_direction > 0 else 'right'
         self._publish_status(f'avoiding_obstacle@{self.idx}:{label}:{direction}')
         self.get_logger().info(
             f'Obstacle blocking waypoint {self.idx} ({label}); rerouting {direction}.')
+
+    def _reset_stuck_ref(self):
+        if self.current_pose is not None:
+            self._stuck_ref_pos = (self.current_pose[0], self.current_pose[1])
+        self._stuck_ref_time = self.get_clock().now()
+
+    def _check_stuck(self, label: str) -> bool:
+        """Return True and enter recovery if the robot hasn't moved enough."""
+        if self.current_pose is None:
+            return False
+        now = self.get_clock().now()
+        timeout = float(self.get_parameter('stuck_timeout_s').value)
+        min_progress = float(self.get_parameter('stuck_min_progress_m').value)
+
+        if self._stuck_ref_pos is None or self._stuck_ref_time is None:
+            self._reset_stuck_ref()
+            return False
+
+        elapsed = (now - self._stuck_ref_time).nanoseconds / 1e9
+        dx = self.current_pose[0] - self._stuck_ref_pos[0]
+        dy = self.current_pose[1] - self._stuck_ref_pos[1]
+        progress = math.hypot(dx, dy)
+
+        if progress >= min_progress:
+            self._reset_stuck_ref()
+            return False
+
+        if elapsed >= timeout:
+            self._recovery_attempts += 1
+            self.phase = 'recovery'
+            self._recovery_t0 = now
+            self._publish_status(f'stuck_recovery@{self.idx}:{label}:attempt{self._recovery_attempts}')
+            self.get_logger().warn(
+                f'Stuck at waypoint {self.idx} ({label}) — backing up '
+                f'(attempt {self._recovery_attempts}).')
+            self._reset_stuck_ref()
+            return True
+        return False
 
     def _tick(self):
         if self.run_finished or self.current_pose is None:
@@ -231,6 +282,7 @@ class WaypointFollower(Node):
             self._publish_status(f'skipping@{self.idx}:{label}')
             self.idx += 1
             self.phase = 'turn'
+            self._reset_stuck_ref()
             return
         x, y, yaw = self.current_pose
         dx, dy = gx - x, gy - y
@@ -247,6 +299,8 @@ class WaypointFollower(Node):
         cmd = Twist()
         if self.phase == 'drive' and dist >= pos_tol and self._path_blocked(metrics):
             self._enter_avoidance(label, metrics)
+        elif self.phase == 'drive' and dist >= pos_tol:
+            self._check_stuck(label)
 
         if self.phase == 'turn':
             err = angle_diff(heading_to_goal, yaw)
@@ -284,6 +338,15 @@ class WaypointFollower(Node):
             if metrics['front'] > clear_threshold and abs(goal_err) < resume_tol:
                 self.phase = 'turn'
                 self._publish_status(f'resuming_waypoint@{self.idx}:{label}')
+        elif self.phase == 'recovery':
+            backup_speed = float(self.get_parameter('recovery_backup_speed').value)
+            backup_dur = float(self.get_parameter('recovery_backup_duration_s').value)
+            elapsed = (self.get_clock().now() - self._recovery_t0).nanoseconds / 1e9
+            if elapsed < backup_dur:
+                cmd.linear.x = backup_speed
+            else:
+                self.phase = 'turn'
+                self._publish_status(f'recovery_done@{self.idx}:{label}')
         elif self.phase == 'align':
             err = angle_diff(gyaw, yaw)
             if abs(err) < yaw_tol:

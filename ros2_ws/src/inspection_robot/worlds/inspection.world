@@ -7,6 +7,10 @@
       <real_time_update_rate>1000</real_time_update_rate>
     </physics>
 
+    <plugin name="gazebo_ros_init" filename="libgazebo_ros_init.so"/>
+    <plugin name="gazebo_ros_factory" filename="libgazebo_ros_factory.so"/>
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so"/>
+
     <include><uri>model://sun</uri></include>
     <include><uri>model://ground_plane</uri></include>
 
@@ -95,6 +99,54 @@
   <name>aruco_marker_4</name>
   <pose>1.8 1.8 0.5 0 0 3.9270</pose>
 </include>
+
+<!-- Simulated defect: red warning indicator adjacent to marker_0 -->
+<model name="defect_marker_0">
+  <static>true</static>
+  <link name="link">
+    <pose>2.47 0.22 0.5 0 0 0</pose>
+    <visual name="v">
+      <geometry><box><size>0.04 0.16 0.16</size></box></geometry>
+      <material>
+        <ambient>0.97 0.02 0.02 1</ambient>
+        <diffuse>0.97 0.02 0.02 1</diffuse>
+        <specular>0.2 0.0 0.0 1</specular>
+      </material>
+    </visual>
+  </link>
+</model>
+
+<!-- Simulated defect: dark corrosion patch adjacent to marker_2 -->
+<model name="defect_marker_2">
+  <static>true</static>
+  <link name="link">
+    <pose>-2.47 0.22 0.5 0 0 0</pose>
+    <visual name="v">
+      <geometry><box><size>0.04 0.16 0.16</size></box></geometry>
+      <material>
+        <ambient>0.04 0.03 0.02 1</ambient>
+        <diffuse>0.04 0.03 0.02 1</diffuse>
+        <specular>0.01 0.01 0.01 1</specular>
+      </material>
+    </visual>
+  </link>
+</model>
+
+<!-- Simulated defect: orange heat indicator adjacent to marker_4 -->
+<model name="defect_marker_4">
+  <static>true</static>
+  <link name="link">
+    <pose>1.66 1.94 0.5 0 0 0.785</pose>
+    <visual name="v">
+      <geometry><box><size>0.04 0.16 0.16</size></box></geometry>
+      <material>
+        <ambient>0.97 0.42 0.01 1</ambient>
+        <diffuse>0.97 0.42 0.01 1</diffuse>
+        <specular>0.3 0.1 0.0 1</specular>
+      </material>
+    </visual>
+  </link>
+</model>
 
   </world>
 </sdf>
