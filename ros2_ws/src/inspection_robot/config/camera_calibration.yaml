@@ -1,0 +1,33 @@
+# TurtleBot3 Waffle Pi simulated camera intrinsics (Gazebo Classic).
+# Used by aruco_detector as a fallback when CameraInfo has not yet arrived.
+# Values derived from the Gazebo camera plugin: width=1280, height=720,
+# horizontal FOV = 1.3962634 rad (80 deg).
+#   fx = fy = width / (2 * tan(hfov/2)) ≈ 762.75
+#   cx = width/2 = 640, cy = height/2 = 360
+
+image_width: 1280
+image_height: 720
+camera_name: camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [762.75, 0.0, 640.0,
+         0.0, 762.75, 360.0,
+         0.0,   0.0,   1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [762.75, 0.0, 640.0, 0.0,
+         0.0, 762.75, 360.0, 0.0,
+         0.0,   0.0,   1.0, 0.0]

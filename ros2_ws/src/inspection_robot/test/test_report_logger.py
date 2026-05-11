@@ -36,6 +36,22 @@ def test_merge_detection_observation_ignores_farther_update():
     assert observations[1]['best_distance_m'] == 1.0
 
 
+def test_merge_detection_observation_handles_multiple_markers():
+    observations = {}
+    for detection in [{'id': 0, 'distance_m': 1.0}, {'id': 1, 'distance_m': 2.0}]:
+        merge_detection_observation(
+            observations,
+            detection['id'],
+            detection,
+            {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+            1.0,
+            100.0,
+        )
+
+    assert observations[0]['best_distance_m'] == 1.0
+    assert observations[1]['best_distance_m'] == 2.0
+
+
 def test_write_simple_pdf_creates_pdf(tmp_path):
     report = {
         'run_id': 'run_test',

@@ -117,9 +117,9 @@ The hardware launch assumes TurtleBot3 bringup, a `/scan` laser, `/odom`, and a 
 
 ### Phase 1 — Simulation Improvements
 - [x] **Obstacle avoidance:** `waypoint_follower.py` now uses `/scan` to sidestep around blocked paths before resuming waypoint tracking
-- [x] **Camera calibration file:** `aruco_detector.py` now loads `config/camera_sim.yaml` and still falls back to `CameraInfo`
+- [x] **Camera calibration file:** `aruco_detector.py` now loads YAML camera calibration from `config/camera_sim.yaml` and can also use the remote-added `config/camera_calibration.yaml` format
 - [x] **Annotated image stream:** `aruco_detector.py` publishes a continuous `/inspection/annotated` image stream, and `bringup.launch.py` can start RViz with `use_rviz:=true`
-- [x] **Re-detection robustness:** `aruco_detector.py` now applies a confidence gate and requires consecutive detections before publishing a sighting
+- [x] **Re-detection robustness:** `aruco_detector.py` now applies a confidence gate and requires consecutive detections before publishing a sighting; raw detections still appear in the annotated stream
 
 ### Phase 2 — Real Hardware Readiness
 - [x] **Navigation2 migration:** `nav2_waypoint_follower.py` uses Nav2 `NavigateToPose`; `bringup_nav2.launch.py` starts Nav2 in simulation
@@ -134,5 +134,5 @@ The hardware launch assumes TurtleBot3 bringup, a `/scan` laser, `/odom`, and a 
 
 ### Phase 4 — Deployment & CI
 - [x] **Docker image:** `Dockerfile`, `.dockerignore`, and `docker/entrypoint.sh` build the ROS workspace into a reproducible Humble image
-- [x] **CI pipeline:** `.github/workflows/colcon.yml` builds and tests `inspection_robot` on push and PR
-- [x] **Unit tests:** `pytest` tests cover report deduplication/PDF helper logic and waypoint skip/avoidance helpers
+- [x] **CI pipeline:** `.github/workflows/colcon.yml` builds/tests the ROS package, and `.github/workflows/ci.yml` keeps the remote's lightweight pytest/lint checks
+- [x] **Unit tests:** `pytest` tests cover report deduplication/PDF helper logic, waypoint skip/avoidance helpers, and the remote-added waypoint math coverage
