@@ -22,6 +22,7 @@ data_files = [
     (f'share/{package_name}', ['package.xml']),
     (f'share/{package_name}/launch', glob('launch/*.launch.py')),
     (f'share/{package_name}/config', glob('config/*.yaml')),
+    (f'share/{package_name}/rviz', glob('rviz/*.rviz')),
     (f'share/{package_name}/worlds', glob('worlds/*.world')),
 ]
 data_files += tree('models')
@@ -33,6 +34,7 @@ setup(
     data_files=data_files,
     install_requires=['setuptools'],
     zip_safe=True,
+    tests_require=['pytest'],
     maintainer='izzatbek',
     maintainer_email='murodjonovizzatbek@gmail.com',
     description='Autonomous inspection robot in Gazebo: waypoint follower + ArUco detection + report logger.',
@@ -41,6 +43,10 @@ setup(
         'console_scripts': [
             'aruco_detector = inspection_robot.aruco_detector:main',
             'waypoint_follower = inspection_robot.waypoint_follower:main',
+            'nav2_waypoint_follower = inspection_robot.nav2_waypoint_follower:main',
+            'anomaly_detector = inspection_robot.anomaly_detector:main',
+            'inspection_scheduler = inspection_robot.inspection_scheduler:main',
+            'dashboard_server = inspection_robot.dashboard_server:main',
             'report_logger = inspection_robot.report_logger:main',
         ],
     },

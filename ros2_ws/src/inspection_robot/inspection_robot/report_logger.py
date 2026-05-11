@@ -16,21 +16,24 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 import rclpy
 from rclpy.node import Node
 
 from std_msgs.msg import Bool, String
+from inspection_robot import report_utils
 
 
 class ReportLogger(Node):
     def __init__(self):
         super().__init__('report_logger')
         self.declare_parameter('detections_topic', '/inspection/detections')
+        self.declare_parameter('anomalies_topic', '/inspection/anomalies')
         self.declare_parameter('done_topic', '/inspection/run_done')
         self.declare_parameter('output_dir', os.path.expanduser('~/inspection_reports'))
         self.declare_parameter('expected_marker_ids', [0, 1, 2, 3, 4])
+        self.declare_parameter('write_pdf', True)
 
         self.run_id = datetime.now().strftime('run_%Y%m%d_%H%M%S')
         self.output_dir = os.path.join(
@@ -39,6 +42,7 @@ class ReportLogger(Node):
 
         self.expected = list(self.get_parameter('expected_marker_ids').value)
         self.observations: Dict[int, dict] = {}
+        self.anomalies: Dict[int, dict] = {}
         self.frames_processed = 0
         self.start_wall = time.time()
         self.flushed = False
@@ -46,6 +50,9 @@ class ReportLogger(Node):
         self.create_subscription(
             String, self.get_parameter('detections_topic').value,
             self._on_detection, 10)
+        self.create_subscription(
+            String, self.get_parameter('anomalies_topic').value,
+            self._on_anomaly, 10)
         self.create_subscription(
             Bool, self.get_parameter('done_topic').value, self._on_done, 1)
 
@@ -60,28 +67,26 @@ class ReportLogger(Node):
         stamp = payload.get('stamp_sec', 0) + payload.get('stamp_nsec', 0) * 1e-9
         for det in payload.get('detections', []):
             mid = int(det['id'])
-            distance = det.get('distance_m')
-            existing = self.observations.get(mid)
-            if existing is None:
-                self.observations[mid] = {
+            report_utils.merge_detection_observation(
+                self.observations, mid, det, payload.get('robot_pose'), stamp, time.time())
+
+    def _on_anomaly(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        for event in payload.get('anomalies', []):
+            mid = int(event['id'])
+            existing = self.anomalies.get(mid)
+            if existing is None or event.get('status') == 'ANOMALY':
+                self.anomalies[mid] = {
                     'id': mid,
-                    'first_seen_stamp': stamp,
-                    'first_seen_wall': time.time(),
-                    'best_distance_m': distance,
-                    'best_tvec': det.get('tvec'),
-                    'best_rvec': det.get('rvec'),
-                    'best_robot_pose': payload.get('robot_pose'),
-                    'sightings': 1,
+                    'status': event.get('status', 'UNKNOWN'),
+                    'types': event.get('types', []),
+                    'scores': event.get('scores', {}),
+                    'snapshot_path': event.get('snapshot_path'),
+                    'stamp_wall': payload.get('stamp_wall', time.time()),
                 }
-            else:
-                existing['sightings'] += 1
-                if (distance is not None and
-                        (existing['best_distance_m'] is None or
-                         distance < existing['best_distance_m'])):
-                    existing['best_distance_m'] = distance
-                    existing['best_tvec'] = det.get('tvec')
-                    existing['best_rvec'] = det.get('rvec')
-                    existing['best_robot_pose'] = payload.get('robot_pose')
 
     def _on_done(self, msg: Bool):
         if msg.data:
@@ -103,6 +108,7 @@ class ReportLogger(Node):
             'missing_markers': sorted(expected - seen),
             'unexpected_markers': sorted(seen - expected),
             'observations': sorted(self.observations.values(), key=lambda o: o['id']),
+            'anomalies': sorted(self.anomalies.values(), key=lambda o: o['id']),
         }
         json_path = os.path.join(self.output_dir, 'report.json')
         with open(json_path, 'w') as f:
@@ -113,25 +119,37 @@ class ReportLogger(Node):
             w = csv.writer(f)
             w.writerow(['marker_id', 'sightings', 'first_seen_wall',
                         'best_distance_m', 'tvec_x', 'tvec_y', 'tvec_z',
-                        'robot_x', 'robot_y', 'robot_yaw', 'status'])
+                        'robot_x', 'robot_y', 'robot_yaw',
+                        'inspection_status', 'anomaly_types', 'snapshot_path'])
             for mid in sorted(expected | seen):
                 obs = self.observations.get(mid)
+                anomaly = self.anomalies.get(mid, {})
                 if obs is None:
-                    w.writerow([mid, 0, '', '', '', '', '', '', '', '', 'MISSING'])
+                    w.writerow([mid, 0, '', '', '', '', '', '', '', '',
+                                'MISSING', '', ''])
                     continue
                 tv = obs.get('best_tvec') or [None, None, None]
                 rp = obs.get('best_robot_pose') or {}
-                status = 'OK' if mid in expected else 'UNEXPECTED'
+                if mid not in expected:
+                    status = 'UNEXPECTED'
+                elif anomaly.get('status') == 'ANOMALY':
+                    status = 'FAIL'
+                else:
+                    status = 'PASS'
                 w.writerow([
                     mid, obs['sightings'], obs['first_seen_wall'],
                     obs.get('best_distance_m'),
                     tv[0], tv[1], tv[2],
                     rp.get('x'), rp.get('y'), rp.get('yaw'),
                     status,
+                    ';'.join(anomaly.get('types', [])),
+                    anomaly.get('snapshot_path', ''),
                 ])
+        if bool(self.get_parameter('write_pdf').value):
+            pdf_path = os.path.join(self.output_dir, 'report.pdf')
+            report_utils.write_simple_pdf(pdf_path, report)
         self.get_logger().info(
             f'Report written: {json_path} ({len(seen)}/{len(expected)} markers detected)')
-
 
 def main(args=None):
     rclpy.init(args=args)

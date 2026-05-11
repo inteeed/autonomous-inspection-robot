@@ -10,10 +10,10 @@ A ROS2-based autonomous inspection robot simulation that navigates a Gazebo envi
 
 The robot simulates a real-world industrial inspection workflow:
 
-1. Navigates autonomously through a set of predefined waypoints using odometry-based control
-2. Detects ArUco markers mounted on equipment (tanks, valves, panels, pipe junctions)
-3. Logs all detections with pose, distance, and robot position data
-4. Generates a timestamped `report.json` and `report.csv` at the end of each run
+1. Navigates autonomously through predefined waypoints with either the simple PID follower or Nav2 `NavigateToPose`
+2. Detects ArUco markers mounted on equipment and publishes annotated camera images
+3. Checks marker regions for simple visual anomalies and streams events to an operator dashboard
+4. Generates timestamped `report.json`, `report.csv`, and `report.pdf` files at the end of each run
 
 **Robot:** TurtleBot3 Waffle Pi  
 **Simulator:** Gazebo Classic  
@@ -27,7 +27,10 @@ The robot simulates a real-world industrial inspection workflow:
 Gazebo Simulation
        |
   [Camera Feed]  ──→  aruco_detector  ──→  /inspection/detections  ──→  report_logger
+       │                 │
+       │                 └────────────→  /inspection/annotated  ──→  RViz
   [Odometry]     ──→  waypoint_follower ──────────────────────────────→  report_logger
+  [LaserScan]    ──→  waypoint_follower
                            |
                       /cmd_vel
                            |
@@ -36,9 +39,13 @@ Gazebo Simulation
 
 | Node | Role |
 |---|---|
-| `aruco_detector` | Detects ArUco markers from camera images, publishes JSON detections |
-| `waypoint_follower` | 4-phase turn→drive→align→dwell controller, visits 6 waypoints |
-| `report_logger` | Deduplicates sightings, writes `report.json` + `report.csv` |
+| `aruco_detector` | Loads camera calibration YAML, confirms detections across frames, publishes JSON detections + annotated images |
+| `waypoint_follower` | Waypoint controller with scan-based obstacle rerouting around the tank obstacles |
+| `nav2_waypoint_follower` | Sends each inspection waypoint to Nav2 using the `NavigateToPose` action |
+| `anomaly_detector` | Checks marker ROIs for visual anomaly signals and saves ROI snapshots |
+| `inspection_scheduler` | Triggers scheduled inspection runs and publishes skip hints for recently nominal markers |
+| `dashboard_server` | Serves a live event dashboard over HTTP server-sent events |
+| `report_logger` | Deduplicates sightings, merges anomalies, writes `report.json`, `report.csv`, and `report.pdf` |
 
 ---
 
@@ -60,9 +67,10 @@ Gazebo Simulation
 
 - ROS2 Humble (or Foxy)
 - Gazebo Classic (11)
-- TurtleBot3 packages: `turtlebot3`, `turtlebot3_gazebo`, `turtlebot3_description`
+- TurtleBot3 packages: `turtlebot3`, `turtlebot3_gazebo`, `turtlebot3_description`, `turtlebot3_bringup`
+- Nav2 + SLAM packages: `nav2_bringup`, `nav2_msgs`, `slam_toolbox`
 - Python: `opencv-contrib-python`, `numpy`, `pyyaml`
-- `ros-humble-cv-bridge`, `ros-humble-gazebo-ros-pkgs`
+- `ros-humble-cv-bridge`, `ros-humble-gazebo-ros-pkgs`, `ros-humble-v4l2-camera`
 
 ---
 
@@ -77,34 +85,54 @@ source install/setup.bash
 # Generate ArUco marker textures (first time only)
 python3 src/inspection_robot/scripts/generate_world_assets.py
 
-# Launch everything (Gazebo + all 3 nodes)
+# Launch everything (Gazebo + nodes)
 ros2 launch inspection_robot bringup.launch.py
+
+# Launch with RViz watching /inspection/annotated
+ros2 launch inspection_robot bringup.launch.py use_rviz:=true
+
+# Launch simulation with Nav2 + slam_toolbox mapping
+ros2 launch inspection_robot bringup_nav2.launch.py use_slam:=true
+
+# Launch simulation with Nav2 localization against a saved map
+ros2 launch inspection_robot bringup_nav2.launch.py use_slam:=false map:=/path/to/map.yaml
+
+# Launch intelligence nodes: anomaly detector, scheduler, dashboard
+ros2 launch inspection_robot inspection_intelligence.launch.py
+
+# Hardware launch path for a TurtleBot3 + v4l2 camera
+ros2 launch inspection_robot bringup_hw.launch.py map:=/path/to/map.yaml
+
+# Live dashboard
+xdg-open http://localhost:8080
 ```
 
-Reports are saved to `~/inspection_reports/run_YYYYMMDD_HHMMSS/`.
+Reports are saved to `~/inspection_reports/run_YYYYMMDD_HHMMSS/`. Anomaly ROI snapshots are saved under `~/inspection_reports/anomalies/` by default.
+
+The hardware launch assumes TurtleBot3 bringup, a `/scan` laser, `/odom`, and a camera driver compatible with `v4l2_camera`. Replace `config/camera_hw.yaml` with a real calibration before hardware runs.
 
 ---
 
 ## Next Steps
 
 ### Phase 1 — Simulation Improvements
-- [ ] **Obstacle avoidance:** Integrate a laser scan subscriber in `waypoint_follower.py` to dynamically reroute around the cylindrical tanks instead of relying on clear sight lines between waypoints
-- [ ] **Camera calibration file:** Replace hardcoded intrinsics in `aruco_detector.py` with a loaded `.yaml` calibration file so the node works with different simulated (and real) cameras
-- [ ] **Annotated image stream:** Publish the OpenCV-annotated image on `/inspection/annotated` for live RViz visualization during a run
-- [ ] **Re-detection robustness:** Add a minimum confidence threshold and require N consecutive detections before logging a marker sighting to reduce false positives
+- [x] **Obstacle avoidance:** `waypoint_follower.py` now uses `/scan` to sidestep around blocked paths before resuming waypoint tracking
+- [x] **Camera calibration file:** `aruco_detector.py` now loads `config/camera_sim.yaml` and still falls back to `CameraInfo`
+- [x] **Annotated image stream:** `aruco_detector.py` publishes a continuous `/inspection/annotated` image stream, and `bringup.launch.py` can start RViz with `use_rviz:=true`
+- [x] **Re-detection robustness:** `aruco_detector.py` now applies a confidence gate and requires consecutive detections before publishing a sighting
 
 ### Phase 2 — Real Hardware Readiness
-- [ ] **Navigation2 migration:** Replace the custom odometry PID controller with Nav2 (`NavigateToPose` action) so the robot can handle dynamic obstacles and use a proper global costmap
-- [ ] **SLAM integration:** Add a SLAM node (e.g. `slam_toolbox`) to build a map on the first run; use the saved map for localization on subsequent runs
-- [ ] **Hardware bring-up launch:** Create a separate `bringup_hw.launch.py` that swaps Gazebo nodes for real TurtleBot3 bring-up (`turtlebot3_bringup`) and a real camera node
+- [x] **Navigation2 migration:** `nav2_waypoint_follower.py` uses Nav2 `NavigateToPose`; `bringup_nav2.launch.py` starts Nav2 in simulation
+- [x] **SLAM integration:** `bringup_nav2.launch.py` can start `slam_toolbox` for mapping or Nav2 localization against a saved map
+- [x] **Hardware bring-up launch:** `bringup_hw.launch.py` swaps Gazebo for TurtleBot3 bringup and a configurable real camera node
 
 ### Phase 3 — Inspection Intelligence
-- [ ] **Anomaly detection:** Add a secondary computer vision node that checks the region around each detected marker for visual anomalies (leaks, corrosion, warning lights) using a pretrained model
-- [ ] **Inspection scheduling:** Build a simple scheduler node that triggers runs on a time-based schedule and skips waypoints where markers were recently seen and conditions were nominal
-- [ ] **Remote dashboard:** Stream detection events to a web dashboard (e.g. Flask + Socket.IO or Foxglove Studio) so operators can monitor inspections in real time
-- [ ] **PDF report generation:** Extend `report_logger` to render a human-readable PDF report with annotated images, a site map, and a pass/fail summary per equipment item
+- [x] **Anomaly detection:** `anomaly_detector.py` checks marker ROIs for red warning/leak colors and dark stain/corrosion signals; it is structured so a model can replace the heuristic later
+- [x] **Inspection scheduling:** `inspection_scheduler.py` triggers scheduled runs and publishes skip hints for markers recently seen as nominal
+- [x] **Remote dashboard:** `dashboard_server.py` streams status, detection, and anomaly events to `http://localhost:8080`
+- [x] **PDF report generation:** `report_logger.py` now writes a human-readable `report.pdf` with pass/fail summaries and anomaly snapshot paths
 
 ### Phase 4 — Deployment & CI
-- [ ] **Docker image:** Package the entire workspace into a Docker image for reproducible builds and easy deployment on edge hardware
-- [ ] **CI pipeline:** Add GitHub Actions to build the colcon workspace and run basic node launch tests on every push
-- [ ] **Unit tests:** Write `pytest`-based unit tests for the detection deduplication logic in `report_logger.py` and the waypoint state machine in `waypoint_follower.py`
+- [x] **Docker image:** `Dockerfile`, `.dockerignore`, and `docker/entrypoint.sh` build the ROS workspace into a reproducible Humble image
+- [x] **CI pipeline:** `.github/workflows/colcon.yml` builds and tests `inspection_robot` on push and PR
+- [x] **Unit tests:** `pytest` tests cover report deduplication/PDF helper logic and waypoint skip/avoidance helpers

@@ -12,8 +12,9 @@ open enough that going straight between waypoints works for the demo.
 """
 from __future__ import annotations
 
+import json
 import math
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import yaml
 
@@ -23,7 +24,10 @@ from rclpy.qos import qos_profile_sensor_data
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
+
+from inspection_robot.waypoint_state_machine import choose_avoid_direction, should_skip_label
 
 
 def quat_to_yaw(qx, qy, qz, qw):
@@ -41,6 +45,10 @@ def angle_diff(a, b):
     return d
 
 
+def clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
 class WaypointFollower(Node):
     def __init__(self):
         super().__init__('waypoint_follower')
@@ -48,12 +56,26 @@ class WaypointFollower(Node):
         self.declare_parameter('waypoints_file', '')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('scan_topic', '/scan')
         self.declare_parameter('linear_speed', 0.18)
         self.declare_parameter('angular_speed', 0.6)
         self.declare_parameter('position_tolerance', 0.15)
         self.declare_parameter('yaw_tolerance', 0.10)
         self.declare_parameter('dwell_seconds', 4.0)
         self.declare_parameter('control_rate_hz', 20.0)
+        self.declare_parameter('autostart', True)
+        self.declare_parameter('run_request_topic', '/inspection/run_request')
+        self.declare_parameter('skip_markers_topic', '/inspection/skip_markers')
+        self.declare_parameter('enable_obstacle_avoidance', True)
+        self.declare_parameter('obstacle_distance_threshold', 0.65)
+        self.declare_parameter('clear_distance_threshold', 0.90)
+        self.declare_parameter('front_sector_deg', 25.0)
+        self.declare_parameter('side_sector_deg', 70.0)
+        self.declare_parameter('avoid_heading_offset_rad', 0.95)
+        self.declare_parameter('avoid_heading_tolerance', 0.30)
+        self.declare_parameter('avoid_linear_speed', 0.10)
+        self.declare_parameter('avoid_angular_speed', 0.8)
+        self.declare_parameter('scan_timeout_s', 0.75)
 
         path = self.get_parameter('waypoints_file').value
         self.waypoints: List[Tuple[float, float, float, str]] = self._load_waypoints(path)
@@ -71,13 +93,26 @@ class WaypointFollower(Node):
         self.create_subscription(
             Odometry, self.get_parameter('odom_topic').value,
             self._on_odom, qos_profile_sensor_data)
+        self.create_subscription(
+            LaserScan, self.get_parameter('scan_topic').value,
+            self._on_scan, qos_profile_sensor_data)
+        self.create_subscription(
+            Bool, self.get_parameter('run_request_topic').value,
+            self._on_run_request, 10)
+        self.create_subscription(
+            String, self.get_parameter('skip_markers_topic').value,
+            self._on_skip_markers, 10)
 
         # Internal state
-        self.current_pose = None  # (x, y, yaw)
+        self.current_pose: Optional[Tuple[float, float, float]] = None
+        self.latest_scan: Optional[LaserScan] = None
+        self.last_scan_time = None
         self.idx = 0
-        self.phase = 'turn'        # 'turn' -> 'drive' -> 'align' -> 'dwell'
+        self.phase = 'turn'        # 'turn' -> 'drive' -> 'avoid' -> 'align' -> 'dwell'
         self.dwell_t0 = None
-        self.run_finished = False
+        self.run_finished = not bool(self.get_parameter('autostart').value)
+        self.avoid_direction = 1
+        self.skip_marker_ids = set()
 
         rate = float(self.get_parameter('control_rate_hz').value)
         self.timer = self.create_timer(1.0 / rate, self._tick)
@@ -107,12 +142,77 @@ class WaypointFollower(Node):
                               p.orientation.z, p.orientation.w)),
         )
 
+    def _on_scan(self, msg: LaserScan):
+        self.latest_scan = msg
+        self.last_scan_time = self.get_clock().now()
+
+    def _on_run_request(self, msg: Bool):
+        if not msg.data:
+            return
+        self.idx = 0
+        self.phase = 'turn'
+        self.dwell_t0 = None
+        self.run_finished = False
+        self._publish_status('pid_run_started')
+
+    def _on_skip_markers(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn('Ignoring malformed skip marker payload.')
+            return
+        self.skip_marker_ids = {int(v) for v in payload.get('marker_ids', [])}
+        self._publish_status(f'skip_markers:{sorted(self.skip_marker_ids)}')
+
     def _publish_status(self, text: str):
         m = String(); m.data = text
         self.status_pub.publish(m)
 
     def _stop(self):
         self.cmd_pub.publish(Twist())
+
+    def _scan_is_fresh(self) -> bool:
+        if self.latest_scan is None or self.last_scan_time is None:
+            return False
+        age_s = (self.get_clock().now() - self.last_scan_time).nanoseconds / 1e9
+        return age_s <= float(self.get_parameter('scan_timeout_s').value)
+
+    def _sector_min_range(self, start_deg: float, end_deg: float) -> float:
+        if not self._scan_is_fresh():
+            return math.inf
+        start_rad = math.radians(start_deg)
+        end_rad = math.radians(end_deg)
+        best = math.inf
+        angle = self.latest_scan.angle_min
+        for reading in self.latest_scan.ranges:
+            if start_rad <= angle <= end_rad:
+                if (math.isfinite(reading) and
+                        self.latest_scan.range_min < reading <= self.latest_scan.range_max):
+                    best = min(best, float(reading))
+            angle += self.latest_scan.angle_increment
+        return best
+
+    def _scan_metrics(self):
+        front_deg = float(self.get_parameter('front_sector_deg').value)
+        side_deg = float(self.get_parameter('side_sector_deg').value)
+        return {
+            'front': self._sector_min_range(-front_deg, front_deg),
+            'left': self._sector_min_range(10.0, side_deg),
+            'right': self._sector_min_range(-side_deg, -10.0),
+        }
+
+    def _path_blocked(self, metrics) -> bool:
+        if not bool(self.get_parameter('enable_obstacle_avoidance').value):
+            return False
+        return metrics['front'] < float(self.get_parameter('obstacle_distance_threshold').value)
+
+    def _enter_avoidance(self, label: str, metrics):
+        self.avoid_direction = choose_avoid_direction(metrics['left'], metrics['right'])
+        self.phase = 'avoid'
+        direction = 'left' if self.avoid_direction > 0 else 'right'
+        self._publish_status(f'avoiding_obstacle@{self.idx}:{label}:{direction}')
+        self.get_logger().info(
+            f'Obstacle blocking waypoint {self.idx} ({label}); rerouting {direction}.')
 
     def _tick(self):
         if self.run_finished or self.current_pose is None:
@@ -127,6 +227,11 @@ class WaypointFollower(Node):
             return
 
         gx, gy, gyaw, label = self.waypoints[self.idx]
+        if self._should_skip_waypoint(label):
+            self._publish_status(f'skipping@{self.idx}:{label}')
+            self.idx += 1
+            self.phase = 'turn'
+            return
         x, y, yaw = self.current_pose
         dx, dy = gx - x, gy - y
         dist = math.hypot(dx, dy)
@@ -137,8 +242,12 @@ class WaypointFollower(Node):
         pos_tol = float(self.get_parameter('position_tolerance').value)
         yaw_tol = float(self.get_parameter('yaw_tolerance').value)
         dwell_s = float(self.get_parameter('dwell_seconds').value)
+        metrics = self._scan_metrics()
 
         cmd = Twist()
+        if self.phase == 'drive' and dist >= pos_tol and self._path_blocked(metrics):
+            self._enter_avoidance(label, metrics)
+
         if self.phase == 'turn':
             err = angle_diff(heading_to_goal, yaw)
             if abs(err) < yaw_tol or dist < pos_tol:
@@ -152,6 +261,29 @@ class WaypointFollower(Node):
                 err = angle_diff(heading_to_goal, yaw)
                 cmd.linear.x = v_lin * max(0.0, math.cos(err))
                 cmd.angular.z = max(-v_ang, min(v_ang, 1.5 * err))
+        elif self.phase == 'avoid':
+            avoid_ang = float(self.get_parameter('avoid_angular_speed').value)
+            avoid_lin = float(self.get_parameter('avoid_linear_speed').value)
+            heading_offset = float(self.get_parameter('avoid_heading_offset_rad').value)
+            resume_tol = float(self.get_parameter('avoid_heading_tolerance').value)
+            obstacle_threshold = float(
+                self.get_parameter('obstacle_distance_threshold').value)
+            clear_threshold = float(
+                self.get_parameter('clear_distance_threshold').value)
+
+            avoid_heading = heading_to_goal + self.avoid_direction * heading_offset
+            avoid_err = angle_diff(avoid_heading, yaw)
+            goal_err = angle_diff(heading_to_goal, yaw)
+
+            if metrics['front'] < obstacle_threshold:
+                cmd.angular.z = self.avoid_direction * avoid_ang
+            else:
+                cmd.linear.x = avoid_lin * max(0.0, math.cos(avoid_err))
+                cmd.angular.z = clamp(1.5 * avoid_err, -avoid_ang, avoid_ang)
+
+            if metrics['front'] > clear_threshold and abs(goal_err) < resume_tol:
+                self.phase = 'turn'
+                self._publish_status(f'resuming_waypoint@{self.idx}:{label}')
         elif self.phase == 'align':
             err = angle_diff(gyaw, yaw)
             if abs(err) < yaw_tol:
@@ -169,6 +301,9 @@ class WaypointFollower(Node):
                 self.phase = 'turn'
 
         self.cmd_pub.publish(cmd)
+
+    def _should_skip_waypoint(self, label: str) -> bool:
+        return should_skip_label(label, self.skip_marker_ids)
 
 
 def main(args=None):

@@ -1,0 +1,5 @@
+inspection_scheduler:
+  ros__parameters:
+    schedule_period_s: 3600.0
+    recent_nominal_ttl_s: 86400.0
+    autostart_first_run: false
