@@ -56,11 +56,14 @@ class ArucoDetector(Node):
         self.declare_parameter('marker_size_m', 0.4)
         self.declare_parameter('aruco_dictionary', 'DICT_4X4_50')
         self.declare_parameter('publish_annotated', True)
+        self.declare_parameter('min_consecutive_detections', 2)
+        self.declare_parameter('calibration_file', '')
 
         self.bridge = CvBridge()
         self.camera_matrix: Optional[np.ndarray] = None
         self.dist_coeffs: Optional[np.ndarray] = None
         self.last_odom: Optional[Odometry] = None
+        self._consecutive: dict = {}  # marker_id -> consecutive frame count
 
         dict_name = self.get_parameter('aruco_dictionary').value
         dict_id = getattr(aruco, dict_name, aruco.DICT_4X4_50)
@@ -83,16 +86,39 @@ class ArucoDetector(Node):
         else:
             self.annot_pub = None
 
+        cal_file = self.get_parameter('calibration_file').value
+        if cal_file:
+            self._load_calibration_file(cal_file)
+
         self.get_logger().info(
             f'aruco_detector listening on {image_topic} (info={info_topic}, odom={odom_topic}) '
             f'-> publishing detections to {det_topic}')
 
+    def _load_calibration_file(self, path: str):
+        """Load camera intrinsics from a YAML calibration file as a startup fallback."""
+        try:
+            import yaml
+            with open(path, 'r') as f:
+                cal = yaml.safe_load(f)
+            k_data = cal.get('camera_matrix', {}).get('data', [])
+            d_data = cal.get('distortion_coefficients', {}).get('data', [])
+            if len(k_data) == 9:
+                self.camera_matrix = np.array(k_data, dtype=np.float64).reshape(3, 3)
+                self.dist_coeffs = np.array(d_data, dtype=np.float64) if d_data else np.zeros(5)
+                self.get_logger().info(f'Loaded camera calibration from {path}')
+            else:
+                self.get_logger().warn(f'Calibration file {path} has no valid camera_matrix')
+        except Exception as e:
+            self.get_logger().warn(f'Failed to load calibration file {path}: {e}')
+
     def _on_info(self, msg: CameraInfo):
-        if self.camera_matrix is None:
-            k = np.array(msg.k, dtype=np.float64).reshape(3, 3)
-            d = np.array(msg.d, dtype=np.float64) if len(msg.d) else np.zeros(5)
-            self.camera_matrix = k
-            self.dist_coeffs = d
+        # Live CameraInfo always takes precedence over the file fallback.
+        k = np.array(msg.k, dtype=np.float64).reshape(3, 3)
+        d = np.array(msg.d, dtype=np.float64) if len(msg.d) else np.zeros(5)
+        first = self.camera_matrix is None
+        self.camera_matrix = k
+        self.dist_coeffs = d
+        if first:
             self.get_logger().info('Got CameraInfo, pose estimation enabled.')
 
     def _on_odom(self, msg: Odometry):
@@ -106,7 +132,22 @@ class ArucoDetector(Node):
             return
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = aruco.detectMarkers(gray, self.dictionary, parameters=self.params)
-        if ids is None or len(ids) == 0:
+
+        current_ids = set(ids.flatten().tolist()) if ids is not None and len(ids) > 0 else set()
+        # Reset streak for any marker that disappeared this frame
+        for mid in list(self._consecutive.keys()):
+            if mid not in current_ids:
+                del self._consecutive[mid]
+
+        # Always publish the annotated frame so operators see raw detections in RViz
+        if self.annot_pub is not None and ids is not None and len(ids) > 0:
+            annotated = aruco.drawDetectedMarkers(frame.copy(), corners, ids)
+            try:
+                self.annot_pub.publish(self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8'))
+            except Exception:
+                pass
+
+        if not current_ids:
             return
 
         rvecs = tvecs = None
@@ -114,8 +155,12 @@ class ArucoDetector(Node):
             rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
                 corners, self.marker_size, self.camera_matrix, self.dist_coeffs)
 
+        min_consec = int(self.get_parameter('min_consecutive_detections').value)
         detections = []
         for i, marker_id in enumerate(ids.flatten().tolist()):
+            self._consecutive[marker_id] = self._consecutive.get(marker_id, 0) + 1
+            if self._consecutive[marker_id] < min_consec:
+                continue  # not enough consecutive frames yet
             entry = {'id': int(marker_id)}
             if tvecs is not None:
                 t = tvecs[i].flatten().tolist()
@@ -124,6 +169,9 @@ class ArucoDetector(Node):
                 entry['rvec'] = [float(v) for v in r]
                 entry['distance_m'] = float(np.linalg.norm(tvecs[i]))
             detections.append(entry)
+
+        if not detections:
+            return
 
         robot_pose = None
         if self.last_odom is not None:
@@ -145,13 +193,6 @@ class ArucoDetector(Node):
         out = String()
         out.data = json.dumps(payload)
         self.det_pub.publish(out)
-
-        if self.annot_pub is not None:
-            annotated = aruco.drawDetectedMarkers(frame.copy(), corners, ids)
-            try:
-                self.annot_pub.publish(self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8'))
-            except Exception:
-                pass
 
 
 def main(args=None):

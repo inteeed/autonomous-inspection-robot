@@ -88,10 +88,10 @@ Reports are saved to `~/inspection_reports/run_YYYYMMDD_HHMMSS/`.
 ## Next Steps
 
 ### Phase 1 — Simulation Improvements
-- [ ] **Obstacle avoidance:** Integrate a laser scan subscriber in `waypoint_follower.py` to dynamically reroute around the cylindrical tanks instead of relying on clear sight lines between waypoints
-- [ ] **Camera calibration file:** Replace hardcoded intrinsics in `aruco_detector.py` with a loaded `.yaml` calibration file so the node works with different simulated (and real) cameras
-- [ ] **Annotated image stream:** Publish the OpenCV-annotated image on `/inspection/annotated` for live RViz visualization during a run
-- [ ] **Re-detection robustness:** Add a minimum confidence threshold and require N consecutive detections before logging a marker sighting to reduce false positives
+- [x] **Obstacle avoidance:** LaserScan subscriber in `waypoint_follower.py` checks the forward arc (±20°) and steers toward the more open side when an obstacle is within `obstacle_distance_m` (default 0.40 m)
+- [x] **Camera calibration file:** `config/camera_calibration.yaml` holds TurtleBot3 Waffle Pi intrinsics; `aruco_detector.py` loads it via the `calibration_file` parameter as a fallback before `CameraInfo` arrives (live `CameraInfo` always takes precedence)
+- [x] **Annotated image stream:** Publishes the OpenCV-annotated image on `/inspection/annotated` for live RViz visualization during a run
+- [x] **Re-detection robustness:** `min_consecutive_detections` parameter (default 2) requires a marker to appear in N consecutive frames before it is published to `/inspection/detections`; raw detections still appear in the annotated stream
 
 ### Phase 2 — Real Hardware Readiness
 - [ ] **Navigation2 migration:** Replace the custom odometry PID controller with Nav2 (`NavigateToPose` action) so the robot can handle dynamic obstacles and use a proper global costmap
@@ -106,5 +106,5 @@ Reports are saved to `~/inspection_reports/run_YYYYMMDD_HHMMSS/`.
 
 ### Phase 4 — Deployment & CI
 - [ ] **Docker image:** Package the entire workspace into a Docker image for reproducible builds and easy deployment on edge hardware
-- [ ] **CI pipeline:** Add GitHub Actions to build the colcon workspace and run basic node launch tests on every push
-- [ ] **Unit tests:** Write `pytest`-based unit tests for the detection deduplication logic in `report_logger.py` and the waypoint state machine in `waypoint_follower.py`
+- [x] **CI pipeline:** `.github/workflows/ci.yml` runs pytest unit tests + flake8 lint on every push/PR (no ROS2 installation required)
+- [x] **Unit tests:** `test/test_waypoint_math.py` covers `quat_to_yaw`, `angle_diff`, and `_load_waypoints`; `test/test_report_logger.py` covers deduplication, best-distance tracking, and flush output — all run without ROS2

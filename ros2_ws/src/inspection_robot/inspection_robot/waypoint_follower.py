@@ -13,7 +13,7 @@ open enough that going straight between waypoints works for the demo.
 from __future__ import annotations
 
 import math
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import yaml
 
@@ -23,6 +23,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 
 
@@ -54,6 +55,8 @@ class WaypointFollower(Node):
         self.declare_parameter('yaw_tolerance', 0.10)
         self.declare_parameter('dwell_seconds', 4.0)
         self.declare_parameter('control_rate_hz', 20.0)
+        self.declare_parameter('laser_topic', '/scan')
+        self.declare_parameter('obstacle_distance_m', 0.40)
 
         path = self.get_parameter('waypoints_file').value
         self.waypoints: List[Tuple[float, float, float, str]] = self._load_waypoints(path)
@@ -71,9 +74,13 @@ class WaypointFollower(Node):
         self.create_subscription(
             Odometry, self.get_parameter('odom_topic').value,
             self._on_odom, qos_profile_sensor_data)
+        self.create_subscription(
+            LaserScan, self.get_parameter('laser_topic').value,
+            self._on_scan, qos_profile_sensor_data)
 
         # Internal state
         self.current_pose = None  # (x, y, yaw)
+        self.last_scan: Optional[LaserScan] = None
         self.idx = 0
         self.phase = 'turn'        # 'turn' -> 'drive' -> 'align' -> 'dwell'
         self.dwell_t0 = None
@@ -106,6 +113,43 @@ class WaypointFollower(Node):
             float(quat_to_yaw(p.orientation.x, p.orientation.y,
                               p.orientation.z, p.orientation.w)),
         )
+
+    def _on_scan(self, msg: LaserScan):
+        self.last_scan = msg
+
+    def _obstacle_steer(self) -> float:
+        """Check the forward laser arc for obstacles.
+
+        Returns a signed angular velocity (+left / -right) when the forward
+        path is blocked, or 0.0 when it is clear.
+        """
+        if self.last_scan is None:
+            return 0.0
+        scan = self.last_scan
+        threshold = float(self.get_parameter('obstacle_distance_m').value)
+        fwd_half = 0.35  # ±20° forward detection window
+
+        fwd_min = float('inf')
+        left_min = float('inf')
+        right_min = float('inf')
+        for i, r in enumerate(scan.ranges):
+            if not (scan.range_min <= r <= scan.range_max):
+                continue
+            a = scan.angle_min + i * scan.angle_increment
+            a = math.atan2(math.sin(a), math.cos(a))  # normalize to [-π, π]
+            if abs(a) <= fwd_half:
+                fwd_min = min(fwd_min, r)
+            if 0.0 < a <= 1.2:       # forward-left sector
+                left_min = min(left_min, r)
+            elif -1.2 <= a < 0.0:    # forward-right sector
+                right_min = min(right_min, r)
+
+        if fwd_min >= threshold:
+            return 0.0  # path clear
+
+        v_ang = float(self.get_parameter('angular_speed').value)
+        # Steer toward the side with more clearance
+        return v_ang if left_min >= right_min else -v_ang
 
     def _publish_status(self, text: str):
         m = String(); m.data = text
@@ -149,9 +193,14 @@ class WaypointFollower(Node):
             if dist < pos_tol:
                 self.phase = 'align'
             else:
-                err = angle_diff(heading_to_goal, yaw)
-                cmd.linear.x = v_lin * max(0.0, math.cos(err))
-                cmd.angular.z = max(-v_ang, min(v_ang, 1.5 * err))
+                avoid = self._obstacle_steer()
+                if avoid != 0.0:
+                    cmd.linear.x = v_lin * 0.3   # slow while sidestepping
+                    cmd.angular.z = avoid
+                else:
+                    err = angle_diff(heading_to_goal, yaw)
+                    cmd.linear.x = v_lin * max(0.0, math.cos(err))
+                    cmd.angular.z = max(-v_ang, min(v_ang, 1.5 * err))
         elif self.phase == 'align':
             err = angle_diff(gyaw, yaw)
             if abs(err) < yaw_tol:
